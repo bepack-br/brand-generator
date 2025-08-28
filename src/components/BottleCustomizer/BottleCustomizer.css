@@ -1,0 +1,345 @@
+:root {
+  --primary-color: #2c3e50;
+  --secondary-color: #3498db;
+  --accent-color: #e74c3c;
+  --light-color: #f8f9fa;
+  --dark-color: #34495e;
+  --success-color: #2ecc71;
+  --border-radius: 8px;
+  --box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  --transition: all 0.3s ease;
+}
+
+.bottle-customizer-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.customizer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+  padding: 20px;
+  background: white;
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+}
+
+.customizer-header h2 {
+  color: var(--primary-color);
+  font-size: 1.8rem;
+  margin: 0;
+}
+
+.customizer-wrapper {
+  display: flex;
+  gap: 30px;
+  margin-top: 20px;
+}
+
+/* Coluna esquerda - imagem (50% de largura) */
+.left-column {
+  flex: 1; /* Ocupa 1 parte do espaço disponível */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  min-width: 0; /* Permite que a coluna encolha adequadamente */
+}
+
+.bottle-image {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  transition: transform 0.3s ease;
+}
+
+.bottle-image:hover {
+  transform: scale(1.05);
+}
+
+.variation-info {
+  background: white;
+  padding: 15px;
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  width: 100%;
+}
+
+.variation-info p {
+  margin: 8px 0;
+  color: var(--dark-color);
+}
+
+.price {
+  font-size: 1.4rem;
+  font-weight: bold;
+  color: var(--primary-color);
+  margin-top: 15px;
+}
+
+/* Coluna direita - configurações (50% de largura) */
+.right-column {
+  flex: 1; /* Ocupa 1 parte do espaço disponível (igual à esquerda) */
+  padding: 20px;
+  background: white;
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  min-width: 0; /* Permite que a coluna encolha adequadamente */
+}
+
+.right-column h3 {
+  color: var(--primary-color);
+  font-size: 1.4rem;
+  margin-top: 0;
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid var(--secondary-color);
+}
+
+/* Grupos de opções */
+.option-group, .toggle-group {
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid #eee;
+}
+
+.option-group:last-child, .toggle-group:last-child {
+  border-bottom: none;
+  margin-bottom: 15px;
+}
+
+.option-title {
+  font-size: 1rem;
+  color: var(--primary-color);
+  margin-bottom: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Opções de cor */
+.color-options-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.color-option {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 2px solid transparent;
+}
+
+.color-option:hover:not(.unavailable) {
+  transform: scale(1.1);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.color-option.active {
+  transform: scale(1.1);
+  border-color: var(--secondary-color);
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.3);
+}
+
+/* Toggle options - estilo similar à imagem */
+.toggle-options-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.toggle-option {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  color: #555;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.85rem;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.toggle-option:hover:not(.unavailable) {
+  border-color: #3498db;
+  color: #3498db;
+  background-color: #f8f9fa;
+}
+
+.toggle-option.active {
+  background: var(--secondary-color);
+  border-color: var(--secondary-color);
+  color: white;
+}
+
+/* Estilos para opções indisponíveis */
+.color-option.unavailable {
+  position: relative;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.color-option.unavailable::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 140%;
+  height: 2px;
+  background-color: var(--accent-color);
+  transform: translate(-50%, -50%) rotate(-45deg);
+  transform-origin: center;
+}
+
+.toggle-option.unavailable {
+  position: relative;
+  opacity: 0.6;
+  cursor: not-allowed;
+  background-color: #f5f5f5;
+  color: #999;
+  border-color: #e0e0e0;
+}
+
+.toggle-option.unavailable:hover {
+  border-color: #e0e0e0;
+  color: #999;
+  background-color: #f5f5f5;
+}
+
+.toggle-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Seleção de família */
+.option-group:first-child {
+  background: white;
+  padding: 15px;
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  margin-bottom: 20px;
+}
+
+.option-group:first-child label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--primary-color);
+}
+
+.option-group:first-child select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 1rem;
+  background: #f8f9fa;
+}
+
+/* Botões */
+.button-group {
+  margin-top: 25px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.btn {
+  padding: 12px 20px;
+  border: none;
+  border-radius: 5px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+  text-align: center;
+}
+
+.btn-primary {
+  background: var(--secondary-color);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #2980b9;
+}
+
+.btn-secondary {
+  background: var(--accent-color);
+  color: white;
+}
+
+.btn-secondary:hover {
+  background: #c0392b;
+}
+
+.clear-filters-btn {
+  padding: 8px 16px;
+  font-size: 0.9rem;
+}
+
+.clear-filters-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Responsividade */
+@media (max-width: 900px) {
+  .customizer-wrapper {
+    flex-direction: column;
+  }
+  
+  .customizer-header {
+    flex-direction: column;
+    gap: 15px;
+    text-align: center;
+  }
+}
+
+@media (max-width: 768px) {
+  .bottle-customizer-container {
+    padding: 15px;
+  }
+  
+  .customizer-wrapper {
+    gap: 20px;
+  }
+}
+
+@media (max-width: 480px) {
+  .bottle-customizer-container {
+    padding: 10px;
+  }
+  
+  .color-options-container {
+    justify-content: center;
+  }
+  
+  .toggle-option {
+    font-size: 0.8rem;
+    padding: 6px 10px;
+  }
+  
+  .option-title {
+    font-size: 0.9rem;
+  }
+  
+  .right-column, .left-column {
+    padding: 15px;
+  }
+}
