@@ -343,3 +343,94 @@
     padding: 15px;
   }
 }
+/* Estilos para a textarea do prompt */
+.prompt-input-group {
+  margin-top: 25px;
+  padding-top: 15px;
+  border-top: 1px solid #eee;
+}
+
+.prompt-textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  resize: vertical;
+  margin-bottom: 15px;
+  min-height: 100px;
+}
+
+.prompt-textarea:focus {
+  outline: none;
+  border-color: #3498db;
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
+/* Estilos para os outputs de texto */
+.concepts-output {
+  width: 100%;
+  background: white;
+  padding: 20px;
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  margin-bottom: 20px;
+}
+
+.output-section {
+  margin-bottom: 20px;
+}
+
+.output-section:last-child {
+  margin-bottom: 0;
+}
+
+.output-section h4 {
+  color: var(--primary-color);
+  margin-bottom: 10px;
+  font-size: 1rem;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 5px;
+}
+
+.output-text {
+  color: var(--dark-color);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  background: #f9f9f9;
+  padding: 12px;
+  border-radius: 5px;
+  border-left: 3px solid var(--secondary-color);
+}
+
+/* Botões de ação */
+.action-buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-accent {
+  background: var(--accent-color);
+  color: white;
+}
+
+.btn-accent:hover {
+  background: #c0392b;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Mensagem de erro */
+.error-message {
+  color: var(--accent-color);
+  margin-bottom: 15px;
+  padding: 8px 12px;
+  background: #fee;
+  border-radius: 4px;
+  border-left: 3px solid var(--accent-color);
+}

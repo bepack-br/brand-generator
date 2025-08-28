@@ -3,12 +3,138 @@ import { getColorCode } from './colorMapping';
 import { apiService } from '../../services/api';
 import './BottleCustomizer.css';
 
+// Sua chave API (em produção, use variáveis de ambiente)
+const GEMINI_API_KEY = process.env.REACT_APP_GEMINI_API_KEY || 'AIzaSyDKkwdA-AWwtPOWBd187SkyG9KidcNK1A0';
+
 function BottleCustomizer({ onComplete }) {
   const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [variations, setVariations] = useState([]);
   const [selectedVariation, setSelectedVariation] = useState(null);
   const [allOptions, setAllOptions] = useState({});
+  const [prompt, setPrompt] = useState('');
+  const [brandConcept, setBrandConcept] = useState('');
+  const [packagingConcept, setPackagingConcept] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [customizedImage, setCustomizedImage] = useState(null);
+  const [error, setError] = useState('');
+
+  // Função para gerar texto com Gemini
+  const generateWithGemini = async (promptText) => {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: promptText
+            }]
+          }],
+          generationConfig: {
+            temperature: 0.7,
+            topK: 40,
+            topP: 0.95,
+            maxOutputTokens: 1024,
+          }
+        })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(`Erro na API Gemini: ${response.status} - ${errorData}`);
+      }
+      
+      const data = await response.json();
+      return data.candidates[0].content.parts[0].text;
+    } catch (err) {
+      console.error('Erro na API Gemini:', err);
+      throw new Error(`Erro na API Gemini: ${err.message}`);
+    }
+  };
+
+  // Função para converter imagem para base64
+  const imageToBase64 = async (imageUrl) => {
+    try {
+      const response = await fetch(imageUrl);
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch (err) {
+      console.error('Erro ao converter imagem para base64:', err);
+      throw err;
+    }
+  };
+
+  // Função para gerar imagem com Gemini
+  const generateImageWithGemini = async (promptText, imageUrl) => {
+    try {
+      const imageBase64 = await imageToBase64(imageUrl);
+      
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key=${GEMINI_API_KEY}`;
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: promptText },
+              { 
+                inline_data: {
+                  mime_type: "image/jpeg",
+                  data: imageBase64
+                }
+              }
+            ]
+          }],
+          generationConfig: {
+            temperature: 0.4,
+            topK: 32,
+            topP: 0.95,
+            maxOutputTokens: 1024,
+          }
+        })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(`Erro na API Gemini: ${response.status} - ${errorData}`);
+      }
+      
+      const data = await response.json();
+      
+      // Verificar se a resposta contém texto com uma imagem em base64
+      const responseText = data.candidates[0].content.parts[0].text;
+      
+      // Se a resposta contém uma imagem em base64, retorná-la
+      if (responseText.includes('data:image')) {
+        return responseText;
+      } else {
+        // Se não, tentar extrair a URL de uma imagem gerada
+        const imageMatch = responseText.match(/\!\[.*?\]\((.*?)\)/);
+        if (imageMatch && imageMatch[1]) {
+          return imageMatch[1];
+        } else {
+          throw new Error('Não foi possível encontrar uma imagem na resposta da API');
+        }
+      }
+    } catch (err) {
+      console.error('Erro na geração de imagem:', err);
+      throw err;
+    }
+  };
 
   // Função para formatar textos
   const formatDisplayText = (text) => {
@@ -161,7 +287,95 @@ function BottleCustomizer({ onComplete }) {
 
   const clearFilters = useCallback(() => {
     if (variations.length > 0) setSelectedVariation(variations[0]);
+    setBrandConcept('');
+    setPackagingConcept('');
+    setCustomizedImage(null);
   }, [variations]);
+
+  // Função para gerar conceitos com IA
+  const generateConcepts = async () => {
+    if (!prompt.trim()) {
+      setError('Por favor, descreva sua marca');
+      return;
+    }
+    
+    setIsGenerating(true);
+    setError('');
+    
+    try {
+      const brandPrompt = `
+        Gere um conceito de marca para um produto de cuidados pessoais com base na seguinte descrição: ${prompt}.
+        A marca deve ter um nome criativo, posicionamento claro e valores bem definidos.
+        Retorne apenas o conceito, sem introduções ou markdown.
+      `;
+      
+      const packagingPrompt = `
+        Gere um conceito de embalagem para um frasco de produto de cuidados pessoais com base na seguinte descrição: ${prompt}.
+        Considere que a arte será aplicada em serigrafia diretamente no vidro, sem rótulos colados.
+        Inclua elementos como: nome da marca, quantidade em ML, e descritores como "refrescante" ou "suave" quando apropriado.
+        Retorne apenas o conceito, sem introduções ou markdown.
+      `;
+      
+      const brandResponse = await generateWithGemini(brandPrompt);
+      const packagingResponse = await generateWithGemini(packagingPrompt);
+      
+      setBrandConcept(brandResponse);
+      setPackagingConcept(packagingResponse);
+    } catch (err) {
+      setError('Erro ao gerar conceitos. Tente novamente.');
+      console.error('Erro no Gemini:', err);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Função para gerar a imagem personalizada
+  const generateCustomImage = async () => {
+    if (!brandConcept || !packagingConcept || !selectedVariation) {
+      setError('Gere os conceitos primeiro antes de criar a imagem');
+      return;
+    }
+    
+    setIsGeneratingImage(true);
+    setError('');
+    
+    try {
+      const imageUrl = selectedVariation.image?.src || selectedProduct.images?.[0]?.src || selectedProduct.image;
+      
+      const imagePrompt = `
+        Crie uma visualização realista de um frasco com serigrafia baseada nos seguintes conceitos:
+        CONCEITO DA MARCA: ${brandConcept}
+        CONCEITO DA EMBALAGEM: ${packagingConcept}
+        
+        DIRETRIZES CRÍTICAS:
+        - A arte deve ser em SERIGRAFIA diretamente no vidro, NÃO como rótulos colados
+        - NÃO altere o formato ou cor do frasco
+        - Mantenha a forma e cor original do frasco
+        - Inclua informações como nome da marca, quantidade em ML e descritores curtos
+        - Estilo clean e profissional
+        - A serigrafia deve seguir a curvatura do frasco
+      `;
+      
+      const generatedImage = await generateImageWithGemini(imagePrompt, imageUrl);
+      setCustomizedImage(generatedImage);
+      
+      // Chamar onComplete se fornecido
+      if (onComplete) {
+        onComplete({
+          product: selectedProduct,
+          variation: selectedVariation,
+          brandConcept,
+          packagingConcept,
+          customizedImage: generatedImage
+        });
+      }
+    } catch (err) {
+      setError('Erro ao gerar imagem. Tente novamente.');
+      console.error('Erro no Gemini Image:', err);
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
 
   // Renderizar grupos de opções
   const renderOptionGroups = useCallback(() => {
@@ -286,10 +500,27 @@ function BottleCustomizer({ onComplete }) {
           <div className="left-column">
             <img
               className="bottle-image"
-              src={selectedVariation.image?.src || selectedProduct.images?.[0]?.src || selectedProduct.image}
+              src={customizedImage || selectedVariation.image?.src || selectedProduct.images?.[0]?.src || selectedProduct.image}
               alt={selectedProduct.name}
             />
             
+            {/* Outputs de texto abaixo da imagem */}
+            <div className="concepts-output">
+              <div className="output-section">
+                <h4>Conceito da Marca</h4>
+                <div className="output-text">
+                  {brandConcept || 'Descreva sua marca e gere os conceitos...'}
+                </div>
+              </div>
+              
+              <div className="output-section">
+                <h4>Conceito da Embalagem</h4>
+                <div className="output-text">
+                  {packagingConcept || 'Descreva sua marca e gere os conceitos...'}
+                </div>
+              </div>
+            </div>
+
             {!selectedVariation.invalid ? (
               <div className="variation-info">
                 <p><strong>SKU:</strong> {selectedVariation.sku || 'N/A'}</p>
@@ -308,10 +539,38 @@ function BottleCustomizer({ onComplete }) {
             <h3>Configurações</h3>
             {renderOptionGroups()}
 
-            <div className="button-group">
-              <button className="btn btn-primary" onClick={onComplete}>
-                Continuar para Design AI
-              </button>
+            {/* Textarea para prompt */}
+            <div className="prompt-input-group">
+              <h4 className="option-title">Descreva sua marca</h4>
+              <textarea
+                className="prompt-textarea"
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Descreva com palavras-chave ou detalhes como quer sua marca (ex: natural, premium, vibrante, para pele sensível...)"
+                rows={4}
+              />
+              
+              {error && <div className="error-message">{error}</div>}
+              
+              <div className="action-buttons">
+                <button 
+                  className="btn btn-primary" 
+                  onClick={generateConcepts}
+                  disabled={!prompt.trim() || isGenerating}
+                >
+                  {isGenerating ? 'Gerando...' : 'Gerar Conceitos'}
+                </button>
+                
+                {(brandConcept && packagingConcept) && (
+                  <button 
+                    className="btn btn-accent" 
+                    onClick={generateCustomImage}
+                    disabled={isGeneratingImage}
+                  >
+                    {isGeneratingImage ? 'Criando Frasco...' : 'Criar Frasco Personalizado'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
