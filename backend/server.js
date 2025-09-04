@@ -9,177 +9,126 @@ import http from "http";
 import { fileURLToPath } from "url";
 
 dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// =================== CONFIGURAÇÃO CORS ===================
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true); // requests sem origin
-    if (origin.match(/https?:\/\/localhost(:\d+)?$/) ||
-        origin.match(/https?:\/\/127\.0\.0\.1(:\d+)?$/) ||
-        origin.match(/https?:\/\/192\.168\.\d+\.\d+(:\d+)?$/)) {
-      return callback(null, true);
-    }
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS','PATCH'],
-  allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept'],
-  exposedHeaders: ['Content-Type','Authorization']
-}));
+// Chave CORS para acessar a API do WordPress
+const CORS_KEY = 's1Fd)3pSI<8)d1(;5I|rW.]D{;b*Wzyw';
 
-app.options("*", (req,res)=>{
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.status(200).end();
-});
-
-app.use((req,res,next)=>{
-  const origin = req.headers.origin;
-  if(origin && (origin.includes("localhost") || origin.includes("127.0.0.1"))){
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
-  res.setHeader('Access-Control-Allow-Credentials','true');
-  res.setHeader('Access-Control-Allow-Methods','GET,POST,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization, X-Requested-With');
-  next();
-});
-
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "50mb" }));
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// =================== PASTA TEMP ===================
-const tempDir = path.join(__dirname,'temp');
-if(!fs.existsSync(tempDir)){
-  fs.mkdirSync(tempDir,{recursive:true});
-  console.log("Pasta temp criada:", tempDir);
-}
+// Pasta temp
+const tempDir = path.join(__dirname, "temp");
+if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-// =================== CLIENTE GEMINI ===================
-if(!process.env.GEMINI_API_KEY){
+// Cliente Gemini
+if (!process.env.GEMINI_API_KEY) {
   console.error("⚠️ GEMINI_API_KEY não definida no .env");
   process.exit(1);
 }
-const ai = new GoogleGenAI({apiKey: process.env.GEMINI_API_KEY});
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// =================== FUNÇÃO DE DOWNLOAD ===================
-async function downloadImage(url, filename){
+// Função para fazer requests para a API do WordPress com CORS key
+async function fetchFromWordPress(endpoint, params = {}) {
+  const baseUrl = process.env.WORDPRESS_URL || 'https://seusite.com';
+  const url = new URL(`${baseUrl}/wp-json/wc/v3/${endpoint}`);
+  
+  // Adiciona a chave CORS aos parâmetros
+  url.searchParams.append('cors_key', CORS_KEY);
+  
+  // Adiciona outros parâmetros
+  Object.entries(params).forEach(([key, value]) => {
+    url.searchParams.append(key, value);
+  });
+
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    throw new Error(`Erro WordPress: ${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// Função de download de imagens
+async function downloadImage(url, filename) {
   const filePath = path.join(tempDir, filename);
   const file = fs.createWriteStream(filePath);
 
-  return new Promise((resolve,reject)=>{
-    const download = (currentUrl, redirectCount=0)=>{
-      if(redirectCount>5) return reject(new Error("Muitos redirecionamentos"));
-
-      const protocol = currentUrl.startsWith("https") ? https : http;
-      const request = protocol.get(currentUrl, (response)=>{
-        if(response.statusCode>=300 && response.statusCode<400 && response.headers.location){
-          return download(response.headers.location, redirectCount+1);
-        }
-        if(response.statusCode!==200) return reject(new Error(`Falha no download: ${response.statusCode}`));
-        response.pipe(file);
-        file.on('finish',()=>{
-          file.close();
-          resolve(filePath);
-        });
-      }).on('error',(err)=>{
-        fs.unlink(filePath,()=>{});
-        reject(err);
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith("https") ? https : http;
+    const request = protocol.get(url, (response) => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        return downloadImage(response.headers.location, filename).then(resolve).catch(reject);
+      }
+      if (response.statusCode !== 200) return reject(new Error(`Falha no download: ${response.statusCode}`));
+      response.pipe(file);
+      file.on("finish", () => {
+        file.close();
+        resolve(filePath);
       });
-      request.setTimeout(30000, ()=>{
-        request.destroy();
-        reject(new Error("Timeout no download da imagem"));
-      });
-    };
-    download(url);
+    }).on("error", (err) => {
+      fs.unlink(filePath, () => {});
+      reject(err);
+    });
   });
 }
 
-// =================== ROTAS DE IMAGEM ===================
+// Rota para baixar imagem externa e retornar base64
+app.post("/api/download-image", async (req, res) => {
+  try {
+    const { imageUrl } = req.body;
+    if (!imageUrl) return res.status(400).json({ error: "URL da imagem é obrigatória" });
 
-// Servir imagem local
-app.get("/api/image/:filename",(req,res)=>{
-  const filePath = path.join(tempDir, req.params.filename);
-  if(fs.existsSync(filePath)){
-    res.sendFile(filePath);
-  }else{
-    res.status(404).json({error:"Imagem não encontrada"});
-  }
-});
-
-// Proxy de imagem
-app.get("/api/image-proxy", async (req,res)=>{
-  try{
-    const imageUrl = req.query.url;
-    if(!imageUrl) return res.status(400).json({error:"URL parameter is required"});
-    const response = await fetch(imageUrl,{headers:{'User-Agent':'Mozilla/5.0'}});
-    if(!response.ok) throw new Error(`HTTP ${response.status}`);
-    const buffer = Buffer.from(await response.arrayBuffer());
-    res.setHeader('Content-Type', response.headers.get('content-type')||'image/jpeg');
-    res.setHeader('Access-Control-Allow-Origin','*');
-    res.setHeader('Cache-Control','public,max-age=86400');
-    res.send(buffer);
-  }catch(err){
-    console.error("Erro no proxy:",err);
-    res.status(500).json({error:"Failed to fetch image"});
-  }
-});
-
-// Check image accessibility
-async function checkImageAccessible(url){
-  try{
-    const controller = new AbortController();
-    const timeout = setTimeout(()=>controller.abort(),5000);
-    const response = await fetch(url,{method:"HEAD", signal: controller.signal});
-    clearTimeout(timeout);
-    const corsHeader = response.headers.get('access-control-allow-origin');
-    return {accessible: response.ok, corsFriendly: corsHeader==='*', contentType: response.headers.get('content-type')};
-  }catch(err){
-    return {accessible:false, corsFriendly:false, error: err.message};
-  }
-}
-
-app.get("/api/smart-image", async (req,res)=>{
-  try{
-    const imageUrl = req.query.url;
-    if(!imageUrl) return res.status(400).json({error:"URL required"});
-    const accessInfo = await checkImageAccessible(imageUrl);
-    if(accessInfo.accessible && accessInfo.corsFriendly){
-      return res.redirect(imageUrl);
-    }else{
-      req.query.url = imageUrl;
-      return app._router.handle(req,res);
-    }
-  }catch(err){
-    res.status(500).json({error:err.message});
-  }
-});
-
-// Download de imagem
-app.post("/api/download-image", async (req,res)=>{
-  const {imageUrl} = req.body;
-  if(!imageUrl) return res.status(400).json({error:"URL da imagem é obrigatória"});
-  try{
     const urlObj = new URL(imageUrl);
-    const filename = path.basename(urlObj.pathname)||`image_${Date.now()}.jpg`;
-    const filePath = path.join(tempDir,filename);
-    if(!fs.existsSync(filePath)) await downloadImage(imageUrl, filename);
-    res.json({success:true, localUrl:`/api/image/${filename}`, filename});
-  }catch(err){
-    console.error("Erro ao baixar imagem:",err);
-    res.status(500).json({error:"Erro ao baixar imagem", details: err.message});
+    const filename = `image_${Date.now()}${path.extname(urlObj.pathname) || ".jpg"}`;
+    const filePath = path.join(tempDir, filename);
+
+    if (!fs.existsSync(filePath)) await downloadImage(imageUrl, filename);
+    const buffer = fs.readFileSync(filePath);
+    const base64 = buffer.toString("base64");
+
+    res.json({ success: true, filename, base64 });
+  } catch (err) {
+    console.error("Erro ao baixar imagem:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// =================== GERAÇÃO DE TEXTO ===================
+// Geração de imagens
+app.post("/api/generate-image", async (req, res) => {
+  try {
+    const { base64Image, prompt } = req.body;
+    if (!base64Image || !prompt) return res.status(400).json({ error: "Imagem e prompt são obrigatórios" });
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash-preview-image-generation",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType: "image/png", data: base64Image } }
+          ]
+        }
+      ],
+      config: { responseModalities: ["IMAGE", "TEXT"], temperature: 0.1, maxOutputTokens: 2048 }
+    });
+
+    const imagePart = response.candidates[0]?.content?.parts?.find(p => p.inlineData);
+    if (!imagePart) throw new Error("Nenhuma imagem foi gerada");
+
+    res.json({ success: true, generatedImage: `data:image/png;base64,${imagePart.inlineData.data}` });
+  } catch (err) {
+    console.error("Erro ao gerar imagem:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/generate-text", async (req,res)=>{
-  const {prompt} = req.body;
+  const { prompt } = req.body;
   if(!prompt) return res.status(400).json({error:"Prompt é obrigatório"});
   try{
     const response = await ai.models.generateContent({
@@ -194,125 +143,46 @@ app.post("/api/generate-text", async (req,res)=>{
   }
 });
 
-// =================== GERAÇÃO DE IMAGEM ===================
-
-// Método padrão (base64)
-app.post("/api/generate-image", async (req,res)=>{
-  const {base64Image, prompt} = req.body;
-  if(!base64Image || !prompt) return res.status(400).json({error:"Imagem e prompt são obrigatórios"});
-
-  try{
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash-preview-image-generation",
-      contents:[{
-        role:"user",
-        parts:[
-          {text: prompt},
-          {inlineData:{mimeType:"image/png",data:base64Image}}
-        ]
-      }],
-      config:{
-        responseModalities:["IMAGE","TEXT"], // ✅ corrigido
-        temperature:0.1,
-        maxOutputTokens:2048
-      }
-    });
-
-    const imagePart = response.candidates[0]?.content?.parts?.find(p=>p.inlineData);
-    if(!imagePart) throw new Error("Nenhuma imagem foi gerada na resposta");
-
-    res.json({success:true, generatedImage:`data:image/png;base64,${imagePart.inlineData.data}`});
-  }catch(err){
-    console.error("Erro ao gerar imagem:",err);
-    res.status(500).json({error:"Erro ao gerar imagem", details: err.message});
+// Rota para buscar produtos do WordPress (usando a CORS_KEY)
+app.get("/api/wordpress/products", async (req, res) => {
+  try {
+    const products = await fetchFromWordPress('products', req.query);
+    res.json(products);
+  } catch (err) {
+    console.error("Erro ao buscar produtos:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Método simplificado (URL)
-app.post("/api/generate-image-simple", async (req,res)=>{
-  const {imageUrl, prompt} = req.body;
-  if(!imageUrl || !prompt) return res.status(400).json({error:"URL da imagem e prompt são obrigatórios"});
-
-  let filename;
-  try{
-    const urlObj = new URL(imageUrl);
-    const extension = path.extname(urlObj.pathname) || ".jpg";
-    filename = `image_${Date.now()}${extension}`;
-    await downloadImage(imageUrl, filename);
-
-    const imageBuffer = fs.readFileSync(path.join(tempDir,filename));
-    const base64Image = imageBuffer.toString("base64");
-
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash-preview-image-generation",
-      contents:[{
-        role:"user",
-        parts:[
-          {text: prompt},
-          {inlineData:{mimeType:"image/jpeg", data: base64Image}}
-        ]
-      }],
-      config:{responseModalities:["IMAGE","TEXT"], temperature:0.1, maxOutputTokens:2048}
-    });
-
-    const imagePart = response.candidates[0]?.content?.parts?.find(p=>p.inlineData);
-    if(!imagePart) throw new Error("Nenhuma imagem foi gerada");
-
-    res.json({success:true, generatedImage:`data:image/png;base64,${imagePart.inlineData.data}`});
-  }catch(err){
-    console.error("Erro ao gerar imagem (simplificado):",err);
-    if(filename){
-      const filePath = path.join(tempDir,filename);
-      if(fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    }
-    res.status(500).json({error:"Erro ao gerar imagem", details:err.message});
+// Rota para buscar variações do WordPress (usando a CORS_KEY)
+app.get("/api/wordpress/products/:id/variations", async (req, res) => {
+  try {
+    const variations = await fetchFromWordPress(`products/${req.params.id}/variations`, req.query);
+    res.json(variations);
+  } catch (err) {
+    console.error("Erro ao buscar variações:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// =================== HEALTH CHECK ===================
-app.get("/api/health",(req,res)=>{
-  res.json({status:"OK", timestamp: new Date().toISOString(), tempDir, tempDirExists: fs.existsSync(tempDir)});
-});
+// Health check
+app.get("/api/health", (req, res) => res.json({ status: "OK" }));
 
-// =================== LISTAR MODELOS ===================
-app.get("/api/list-models", async (req,res)=>{
-  try{
-    if(ai.models && typeof ai.models.list==='function'){
-      const list = await ai.models.list();
-      return res.json({ok:true, source:'sdk', list});
-    }
-    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models',{
-      headers:{Authorization:`Bearer ${process.env.GEMINI_API_KEY}`}
+// Limpeza de temp
+setInterval(() => {
+  if (!fs.existsSync(tempDir)) return;
+  fs.readdir(tempDir, (err, files) => {
+    if (err) return;
+    const now = Date.now();
+    const oneHour = 60 * 60 * 1000;
+    files.forEach(file => {
+      const filePath = path.join(tempDir, file);
+      fs.stat(filePath, (err, stats) => {
+        if (err) return;
+        if (now - stats.mtimeMs > oneHour) fs.unlink(filePath, () => {});
+      });
     });
-    const list = await r.json();
-    return res.json({ok:true, source:'rest', list});
-  }catch(err){
-    console.error('Erro ao listar modelos:',err);
-    res.status(500).json({ok:false,error:err.message});
-  }
-});
+  });
+}, 60 * 60 * 1000);
 
-// =================== LIMPEZA DE TEMP ===================
-setInterval(()=>{
-  if(fs.existsSync(tempDir)){
-    fs.readdir(tempDir,(err,files)=>{
-      if(err) return console.error("Erro ao ler temp:",err);
-      const now = Date.now();
-      const oneHour = 60*60*1000;
-      for(const file of files){
-        const filePath = path.join(tempDir,file);
-        fs.stat(filePath,(err,stat)=>{
-          if(err) return;
-          if(now - stat.mtimeMs > oneHour) fs.unlink(filePath,()=>{});
-        });
-      }
-    });
-  }
-},60*60*1000);
-
-// =================== START SERVER ===================
-app.listen(PORT,()=>{
-  console.log(`Servidor rodando na porta ${PORT}`);
-  console.log(`Pasta temp: ${tempDir}`);
-  console.log(`Health check: http://localhost:${PORT}/api/health`);
-});
+app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));

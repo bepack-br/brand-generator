@@ -296,13 +296,12 @@ const applyConceptToBottle = async () => {
     
     // Prompt detalhado para simular serigrafia
     const detailedPrompt = `
-APLIQUE O DESIGN NO FRASCO COMO SERIGRAFIA, MANTENDO A COR E TRANSPARÊNCIA DO FRASCO.
+APLIQUE O DESIGN NO FRASCO COMO SERIGRAFIA, MANTENDO SEMPRE A COR ORIGINAL DO FRASCO.
 
 INFORMAÇÕES DO PRODUTO:
 - Marca: ${brandName}
 - Nome do produto: ${brandName} ${selectedProduct?.name?.split(' ')[0] || 'Premium'}
 - Volume: ${volume}
-- Tipo: ${selectedProduct?.name || 'Produto de Beleza'}
 
 CONCEITO DE MARCA:
 ${brandConcept}
@@ -311,18 +310,14 @@ CONCEITO DE EMBALAGEM:
 ${packagingConcept}
 
 INSTRUÇÕES ESPECÍFICAS:
-1. Aplique a arte diretamente na superfície do frasco, como serigrafia
-2. Mantenha o frasco original sem alterar cor, brilho ou transparência
-3. A arte deve parecer integrada ao material, sem rótulos colados ou adesivos
-4. Respeite perspectiva, curvatura e textura do frasco
-5. Use predominantemente ${mainColors}
-6. Estilo: ${designStyle}
-7. Nome da marca elegante e legível
-8. Informações do volume visíveis (${volume})
-9. Não distorça a estrutura do frasco
-10. Fundo original do frasco deve permanecer intacto
+1. Mantenha a cor, brilho e transparência originais do frasco.
+2. A serigrafia pode ter qualquer cor, contraste ou estilo.
+3. Aplique a arte diretamente na superfície do frasco.
+4. Respeite perspectiva, curvatura e textura do frasco.
+5. Fundo original do frasco deve permanecer intacto.
+6. Nome da marca legível, estilo harmonioso com o design da embalagem.
 
-RESULTADO ESPERADO: Uma imagem do mesmo frasco com a arte aplicada realisticamente como serigrafia.
+RESULTADO ESPERADO: Imagem realista do frasco com a arte aplicada como serigrafia, sem alterar o frasco.
 `;
 
     console.log("Prompt detalhado para serigrafia:", detailedPrompt);
