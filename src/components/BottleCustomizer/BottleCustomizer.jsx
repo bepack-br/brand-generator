@@ -1,10 +1,88 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { getColorCode } from './colorMapping';
 import { apiService } from '../../services/api';
+import { 
+  generateConcepts, 
+  generateBottleImageWithProxy,
+  checkServerHealth
+} from '../../services/aiService';
 import './BottleCustomizer.css';
 
-// Sua chave API (em produção, use variáveis de ambiente)
-const GEMINI_API_KEY = process.env.REACT_APP_GEMINI_API_KEY || 'AIzaSyDKkwdA-AWwtPOWBd187SkyG9KidcNK1A0';
+// Hook para pré-carregar imagens
+const useImagePreloader = (imageUrls) => {
+  useEffect(() => {
+    if (imageUrls && imageUrls.length > 0) {
+      const timer = setTimeout(() => {
+        imageUrls.forEach(url => {
+          if (url) {
+            const img = new Image();
+            img.src = url;
+          }
+        });
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [imageUrls]);
+};
+
+// Funções auxiliares para extrair informações dos conceitos
+const extractBrandName = (concept) => {
+  if (!concept) return 'Marca Personalizada';
+  
+  const lines = concept.split('\n');
+  for (const line of lines) {
+    const cleanLine = line.replace(/^[-*•]\s*/, '').trim();
+    if (cleanLine && !cleanLine.toLowerCase().includes('slogan') && 
+        !cleanLine.toLowerCase().includes('frase') && cleanLine.length > 2) {
+      return cleanLine;
+    }
+  }
+  return 'Marca Personalizada';
+};
+
+const extractMainColors = (concept) => {
+  if (!concept) return 'cores modernas e elegantes';
+  
+  const colorKeywords = ['azul', 'verde', 'vermelho', 'amarelo', 'roxo', 'rosa', 
+                         'laranja', 'marrom', 'preto', 'branco', 'cinza', 'dourado', 
+                         'prateado', 'pastel', 'neutro', 'vibrante'];
+  
+  const foundColors = [];
+  const words = concept.toLowerCase().split(/\s+/);
+  
+  words.forEach(word => {
+    if (colorKeywords.includes(word) && !foundColors.includes(word)) {
+      foundColors.push(word);
+    }
+  });
+  
+  return foundColors.length > 0 ? foundColors.join(', ') : 'cores modernas e elegantes';
+};
+
+const extractDesignStyle = (concept) => {
+  if (!concept) return 'design clean e moderno';
+  
+  const styleKeywords = ['minimalista', 'moderno', 'elegante', 'sofisticado', 'luxo',
+                        'natural', 'orgânico', 'vibrante', 'jovem', 'clássico', 'retrô',
+                        'futurista', 'clean', 'simples', 'complexo', 'detalhado'];
+  
+  for (const word of concept.toLowerCase().split(/\s+/)) {
+    if (styleKeywords.includes(word)) {
+      return word;
+    }
+  }
+  
+  return 'design clean e moderno';
+};
+
+const extractVolumeFromProduct = (product) => {
+  if (!product) return '250 ml';
+  
+  const volumeMatch = product.name?.match(/(\d+)\s*ml/i) || 
+                     product.description?.match(/(\d+)\s*ml/i);
+  
+  return volumeMatch ? `${volumeMatch[1]} ml` : '250 ml';
+};
 
 function BottleCustomizer({ onComplete }) {
   const [products, setProducts] = useState([]);
@@ -15,172 +93,56 @@ function BottleCustomizer({ onComplete }) {
   const [prompt, setPrompt] = useState('');
   const [brandConcept, setBrandConcept] = useState('');
   const [packagingConcept, setPackagingConcept] = useState('');
+  const [generatedImage, setGeneratedImage] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  const [customizedImage, setCustomizedImage] = useState(null);
   const [error, setError] = useState('');
 
-  // Função para gerar texto com Gemini
-  const generateWithGemini = async (promptText) => {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`;
-      
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: promptText
-            }]
-          }],
-          generationConfig: {
-            temperature: 0.7,
-            topK: 40,
-            topP: 0.95,
-            maxOutputTokens: 1024,
-          }
-        })
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro na API Gemini: ${response.status} - ${errorData}`);
-      }
-      
-      const data = await response.json();
-      return data.candidates[0].content.parts[0].text;
-    } catch (err) {
-      console.error('Erro na API Gemini:', err);
-      throw new Error(`Erro na API Gemini: ${err.message}`);
-    }
-  };
+  // Pré-carregar imagens
+  const imagesToPreload = useMemo(() => {
+    if (!variations.length || !selectedProduct) return [];
+    return variations
+      .slice(0, 20)
+      .map(v => v.image?.src || selectedProduct.images?.[0]?.src || selectedProduct.image)
+      .filter(Boolean)
+      .filter((url, index, self) => self.indexOf(url) === index);
+  }, [variations, selectedProduct]);
 
-  // Função para converter imagem para base64
-  const imageToBase64 = async (imageUrl) => {
-    try {
-      const response = await fetch(imageUrl);
-      const blob = await response.blob();
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result.split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-    } catch (err) {
-      console.error('Erro ao converter imagem para base64:', err);
-      throw err;
-    }
-  };
+  useImagePreloader(imagesToPreload);
 
-  // Função para gerar imagem com Gemini
-  const generateImageWithGemini = async (promptText, imageUrl) => {
-    try {
-      const imageBase64 = await imageToBase64(imageUrl);
-      
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key=${GEMINI_API_KEY}`;
-      
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: promptText },
-              { 
-                inline_data: {
-                  mime_type: "image/jpeg",
-                  data: imageBase64
-                }
-              }
-            ]
-          }],
-          generationConfig: {
-            temperature: 0.4,
-            topK: 32,
-            topP: 0.95,
-            maxOutputTokens: 1024,
-          }
-        })
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro na API Gemini: ${response.status} - ${errorData}`);
-      }
-      
-      const data = await response.json();
-      
-      // Verificar se a resposta contém texto com uma imagem em base64
-      const responseText = data.candidates[0].content.parts[0].text;
-      
-      // Se a resposta contém uma imagem em base64, retorná-la
-      if (responseText.includes('data:image')) {
-        return responseText;
-      } else {
-        // Se não, tentar extrair a URL de uma imagem gerada
-        const imageMatch = responseText.match(/\!\[.*?\]\((.*?)\)/);
-        if (imageMatch && imageMatch[1]) {
-          return imageMatch[1];
-        } else {
-          throw new Error('Não foi possível encontrar uma imagem na resposta da API');
-        }
-      }
-    } catch (err) {
-      console.error('Erro na geração de imagem:', err);
-      throw err;
-    }
-  };
-
-  // Função para formatar textos
-  const formatDisplayText = (text) => {
-    if (!text) return '';
-    return text
-      .split('-')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
-  };
-
-  // Função para formatar textos de toggle (uma linha)
-  const formatToggleText = (text) => {
-    if (!text) return '';
-    return text
-      .split('-')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
-  };
-
-  // 🔹 Extrair todas as opções possíveis das variações
-  const extractAllOptionsFromVariations = useCallback((variations) => {
+  // Extrair todas as opções das variações
+  const extractAllOptionsFromVariations = (variations) => {
     const options = {};
-    
     variations.forEach(variation => {
       if (variation.attributes) {
         Object.entries(variation.attributes).forEach(([attrName, attrValue]) => {
-          if (!options[attrName]) {
-            options[attrName] = new Set();
-          }
-          if (attrValue) {
-            options[attrName].add(attrValue);
-          }
+          if (!options[attrName]) options[attrName] = new Set();
+          if (attrValue) options[attrName].add(attrValue);
         });
       }
     });
-    
-    // Converter Sets para Arrays
     const result = {};
     Object.entries(options).forEach(([attrName, valuesSet]) => {
       result[attrName] = Array.from(valuesSet).filter(value => value);
     });
-    
     return result;
-  }, []);
+  };
 
-  // 🔹 Carregar produtos (famílias)
+  // Encontrar variação padrão (sem anel/fechamento)
+  const findVariationWithoutAccessories = (variations) => {
+    for (const variation of variations) {
+      if (!variation.attributes) continue;
+      const hasRing = Object.entries(variation.attributes).some(
+        ([key, value]) => key.toLowerCase().includes('anel') && value && value !== 'sem-anel' && value !== 'none'
+      );
+      const hasClosure = Object.entries(variation.attributes).some(
+        ([key, value]) => key.toLowerCase().includes('fechamento') && value && value !== 'sem-fechamento' && value !== 'none'
+      );
+      if (!hasRing && !hasClosure) return variation;
+    }
+    return variations.length > 0 ? variations[0] : null;
+  };
+
+  // Carregar produtos
   useEffect(() => {
     apiService.getProducts()
       .then(res => {
@@ -190,208 +152,206 @@ function BottleCustomizer({ onComplete }) {
       .catch(err => console.error("Erro ao carregar produtos:", err));
   }, []);
 
-  // 🔹 Mudar família (produto)
-  const handleFamilyChange = useCallback(async (id) => {
+  // Mudar família
+  const handleFamilyChange = async (id) => {
     if (!id) return;
-    setSelectedProduct(products.find(p => p.id === Number(id)) || null);
+    const product = products.find(p => p.id === Number(id));
+    setSelectedProduct(product);
+    try {
+      const res = await apiService.getVariations(id);
+      const productVariations = res.data || [];
+      setVariations(productVariations);
+      setAllOptions(extractAllOptionsFromVariations(productVariations));
+      setSelectedVariation(findVariationWithoutAccessories(productVariations));
+    } catch (err) {
+      console.error("Erro ao carregar variações:", err);
+      setSelectedVariation(null);
+    }
+  };
 
-    // Carregar variações usando a apiService
-    apiService.getVariations(id)
-      .then(res => {
-        const productVariations = res.data || [];
-        setVariations(productVariations);
-        
-        // Extrair todas as opções das variações
-        const options = extractAllOptionsFromVariations(productVariations);
-        setAllOptions(options);
-        
-        if (productVariations.length > 0) {
-          setSelectedVariation(productVariations[0]);
-        } else {
-          setSelectedVariation(null);
-        }
-      })
-      .catch(err => console.error("Erro ao carregar variações:", err));
-  }, [products, extractAllOptionsFromVariations]);
+  // Helpers de opções
+  const formatDisplayText = (text) =>
+    !text ? '' : text.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
-  // 🔹 Verificar se uma opção está disponível
-  const isOptionAvailable = useCallback((attrName, value) => {
+  const isOptionAvailable = (attrName, value) => {
     if (!selectedVariation || !value) return false;
-    
     const newAttributes = { ...selectedVariation.attributes, [attrName]: value };
-    const matched = variations.find(v =>
+    return variations.some(v =>
       Object.entries(newAttributes).every(([k, val]) => !val || v.attributes[k] === val)
     );
-    
-    return !!matched;
-  }, [selectedVariation, variations]);
+  };
 
-  // 🔹 Alterar atributo da variação
-  const handleAttributeChange = useCallback((attrName, value) => {
+  const handleAttributeChange = (attrName, value) => {
     if (!selectedVariation) return;
-
     const newAttributes = { ...selectedVariation.attributes, [attrName]: value };
     const matched = variations.find(v =>
       Object.entries(newAttributes).every(([k, val]) => !val || v.attributes[k] === val)
     );
+    setSelectedVariation(matched || { attributes: newAttributes, invalid: true });
+  };
 
-    if (matched) setSelectedVariation(matched);
-    else setSelectedVariation({ attributes: newAttributes, invalid: true });
-  }, [selectedVariation, variations]);
-
-  const handleColorSelect = useCallback((attrName, colorValue) => {
+  const handleColorSelect = (attrName, colorValue) => {
     if (colorValue && isOptionAvailable(attrName, colorValue)) {
       handleAttributeChange(attrName, colorValue);
     }
-  }, [handleAttributeChange, isOptionAvailable]);
+  };
 
-  const handleToggleSelect = useCallback((attrName, value) => {
+  const handleToggleSelect = (attrName, value) => {
     if (value && isOptionAvailable(attrName, value)) {
       handleAttributeChange(attrName, value);
     }
-  }, [handleAttributeChange, isOptionAvailable]);
-
-  const getAvailableOptions = useCallback((attrName) => {
-    if (!selectedVariation) return [];
-    const valid = variations.filter(v =>
-      Object.entries(selectedVariation.attributes || {}).every(([k, val]) => {
-        if (!val || k === attrName) return true;
-        return v.attributes[k] === val;
-      })
-    );
-    return Array.from(new Set(valid.map(v => v.attributes[attrName])))
-      .filter(value => value);
-  }, [selectedVariation, variations]);
-
-  // 🔹 Obter todas as opções para um atributo
-  const getAllOptionsForAttribute = useCallback((attrName) => {
-    return allOptions[attrName] || [];
-  }, [allOptions]);
-
-  // 🔹 Obter todos os nomes de atributos disponíveis
-  const getAllAttributeNames = useCallback(() => {
-    return Object.keys(allOptions);
-  }, [allOptions]);
-
-  const isColorAttribute = (attrName) => {
-    const lowerAttr = attrName.toLowerCase();
-    return lowerAttr.includes('cor') || lowerAttr.includes('color');
   };
+
+  const getAvailableOptions = (attrName) => {
+    if (!selectedVariation) return [];
+    return variations
+      .filter(v => Object.entries(selectedVariation.attributes || {})
+        .every(([k, val]) => !val || k === attrName || v.attributes[k] === val))
+      .map(v => v.attributes[attrName])
+      .filter((value, index, self) => value && self.indexOf(value) === index);
+  };
+
+  const isColorAttribute = (attrName) =>
+    attrName.toLowerCase().includes('cor') || attrName.toLowerCase().includes('color');
 
   const isToggleAttribute = (attrName) => {
-    const lowerAttr = attrName.toLowerCase();
-    return lowerAttr.includes('volumetria') ||
-           lowerAttr.includes('anel') ||
-           lowerAttr.includes('fechamento');
+    const lower = attrName.toLowerCase();
+    return lower.includes('volumetria') || lower.includes('anel') || lower.includes('fechamento');
   };
 
-  const clearFilters = useCallback(() => {
-    if (variations.length > 0) setSelectedVariation(variations[0]);
+  const clearFilters = () => {
+    if (variations.length > 0) {
+      setSelectedVariation(findVariationWithoutAccessories(variations));
+    }
     setBrandConcept('');
     setPackagingConcept('');
-    setCustomizedImage(null);
-  }, [variations]);
+    setGeneratedImage(null);
+  };
 
-  // Função para gerar conceitos com IA
-  const generateConcepts = async () => {
+  // Gerar conceitos
+  const generateConceptsHandler = async () => {
     if (!prompt.trim()) {
       setError('Por favor, descreva sua marca');
       return;
     }
-    
     setIsGenerating(true);
     setError('');
-    
+
     try {
-      const brandPrompt = `
-        Gere um conceito de marca para um produto de cuidados pessoais com base na seguinte descrição: ${prompt}.
-        A marca deve ter um nome criativo, posicionamento claro e valores bem definidos.
-        Retorne apenas o conceito, sem introduções ou markdown.
-      `;
-      
-      const packagingPrompt = `
-        Gere um conceito de embalagem para um frasco de produto de cuidados pessoais com base na seguinte descrição: ${prompt}.
-        Considere que a arte será aplicada em serigrafia diretamente no vidro, sem rótulos colados.
-        Inclua elementos como: nome da marca, quantidade em ML, e descritores como "refrescante" ou "suave" quando apropriado.
-        Retorne apenas o conceito, sem introduções ou markdown.
-      `;
-      
-      const brandResponse = await generateWithGemini(brandPrompt);
-      const packagingResponse = await generateWithGemini(packagingPrompt);
-      
-      setBrandConcept(brandResponse);
-      setPackagingConcept(packagingResponse);
+      const structuredPrompt = `
+Crie conceitos para uma marca de cosméticos baseada na seguinte descrição:
+"${prompt}"
+
+Gere o resultado no seguinte formato, exatamente assim:
+
+CONCEITO DE MARCA:
+- [nome da marca, slogans curtos, variações de frases criativas]
+
+CONCEITO DE EMBALAGEM:
+- [cores, design, sensação visual, estilo do rótulo]
+
+Não inclua nada fora desses dois blocos. Use frases curtas, claras e impactantes.
+`;
+
+      const response = await generateConcepts(structuredPrompt);
+      console.log("Texto gerado:", response);
+
+      const [brandPartRaw, packagingPartRaw] = response.split('CONCEITO DE EMBALAGEM:');
+      const brandPart = brandPartRaw?.replace('CONCEITO DE MARCA:', '').trim() || 'Não foi possível gerar conceitos.';
+      const packagingPart = packagingPartRaw?.trim() || 'Conceito de embalagem não gerado';
+
+      setBrandConcept(brandPart);
+      setPackagingConcept(packagingPart);
+
     } catch (err) {
+      console.error(err);
       setError('Erro ao gerar conceitos. Tente novamente.');
-      console.error('Erro no Gemini:', err);
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // Função para gerar a imagem personalizada
-  const generateCustomImage = async () => {
-    if (!brandConcept || !packagingConcept || !selectedVariation) {
-      setError('Gere os conceitos primeiro antes de criar a imagem');
-      return;
+  // Aplicar conceito na imagem (versão serigrafia)
+const applyConceptToBottle = async () => {
+  if (!selectedVariation?.image?.src || !brandConcept || !packagingConcept) {
+    setError("Faltam informações para gerar imagem.");
+    return;
+  }
+  
+  setIsGenerating(true);
+  setError('');
+  
+  try {
+    // Verificar se o servidor está respondendo
+    const isServerHealthy = await checkServerHealth();
+    if (!isServerHealthy) {
+      throw new Error("Servidor de geração de imagens não está respondendo. Verifique se o servidor está rodando na porta 3001.");
     }
     
-    setIsGeneratingImage(true);
-    setError('');
+    // Extrair informações para o prompt detalhado
+    const brandName = extractBrandName(brandConcept);
+    const mainColors = extractMainColors(packagingConcept);
+    const designStyle = extractDesignStyle(packagingConcept);
+    const volume = extractVolumeFromProduct(selectedProduct);
     
-    try {
-      const imageUrl = selectedVariation.image?.src || selectedProduct.images?.[0]?.src || selectedProduct.image;
-      
-      const imagePrompt = `
-        Crie uma visualização realista de um frasco com serigrafia baseada nos seguintes conceitos:
-        CONCEITO DA MARCA: ${brandConcept}
-        CONCEITO DA EMBALAGEM: ${packagingConcept}
-        
-        DIRETRIZES CRÍTICAS:
-        - A arte deve ser em SERIGRAFIA diretamente no vidro, NÃO como rótulos colados
-        - NÃO altere o formato ou cor do frasco
-        - Mantenha a forma e cor original do frasco
-        - Inclua informações como nome da marca, quantidade em ML e descritores curtos
-        - Estilo clean e profissional
-        - A serigrafia deve seguir a curvatura do frasco
-      `;
-      
-      const generatedImage = await generateImageWithGemini(imagePrompt, imageUrl);
-      setCustomizedImage(generatedImage);
-      
-      // Chamar onComplete se fornecido
-      if (onComplete) {
-        onComplete({
-          product: selectedProduct,
-          variation: selectedVariation,
-          brandConcept,
-          packagingConcept,
-          customizedImage: generatedImage
-        });
-      }
-    } catch (err) {
-      setError('Erro ao gerar imagem. Tente novamente.');
-      console.error('Erro no Gemini Image:', err);
-    } finally {
-      setIsGeneratingImage(false);
-    }
-  };
+    // Prompt detalhado para simular serigrafia
+    const detailedPrompt = `
+APLIQUE O DESIGN NO FRASCO COMO SERIGRAFIA, MANTENDO A COR E TRANSPARÊNCIA DO FRASCO.
 
-  // Renderizar grupos de opções
-  const renderOptionGroups = useCallback(() => {
+INFORMAÇÕES DO PRODUTO:
+- Marca: ${brandName}
+- Nome do produto: ${brandName} ${selectedProduct?.name?.split(' ')[0] || 'Premium'}
+- Volume: ${volume}
+- Tipo: ${selectedProduct?.name || 'Produto de Beleza'}
+
+CONCEITO DE MARCA:
+${brandConcept}
+
+CONCEITO DE EMBALAGEM:
+${packagingConcept}
+
+INSTRUÇÕES ESPECÍFICAS:
+1. Aplique a arte diretamente na superfície do frasco, como serigrafia
+2. Mantenha o frasco original sem alterar cor, brilho ou transparência
+3. A arte deve parecer integrada ao material, sem rótulos colados ou adesivos
+4. Respeite perspectiva, curvatura e textura do frasco
+5. Use predominantemente ${mainColors}
+6. Estilo: ${designStyle}
+7. Nome da marca elegante e legível
+8. Informações do volume visíveis (${volume})
+9. Não distorça a estrutura do frasco
+10. Fundo original do frasco deve permanecer intacto
+
+RESULTADO ESPERADO: Uma imagem do mesmo frasco com a arte aplicada realisticamente como serigrafia.
+`;
+
+    console.log("Prompt detalhado para serigrafia:", detailedPrompt);
+    
+    // Usar método com proxy para evitar problemas de CORS
+    const newImage = await generateBottleImageWithProxy(
+      selectedVariation.image.src, 
+      detailedPrompt
+    );
+    
+    setGeneratedImage(newImage);
+    
+  } catch (err) {
+    console.error("Erro ao processar a imagem:", err);
+    setError(err.message);
+  } finally {
+    setIsGenerating(false);
+  }
+};
+
+
+  // Renderizar opções
+  const renderOptionGroups = () => {
     if (!selectedVariation || variations.length === 0) return null;
-
-    const attributeNames = getAllAttributeNames();
-
-    return attributeNames.map(attrName => {
+    return Object.keys(allOptions).map(attrName => {
       const availableValues = getAvailableOptions(attrName);
-      const allValues = getAllOptionsForAttribute(attrName);
+      const allValues = allOptions[attrName] || [];
       const displayName = formatDisplayText(attrName.replace('attribute_pa_', ''));
-
-      // Se não temos valores, não renderizar o grupo
-      if (allValues.length === 0) {
-        return null;
-      }
+      if (allValues.length === 0) return null;
 
       if (isColorAttribute(attrName)) {
         return (
@@ -399,19 +359,15 @@ function BottleCustomizer({ onComplete }) {
             <h4 className="option-title">{displayName}</h4>
             <div className="color-options-container">
               {allValues.map(colorValue => {
-                const isSelected = selectedVariation.attributes && selectedVariation.attributes[attrName] === colorValue;
+                const isSelected = selectedVariation.attributes?.[attrName] === colorValue;
                 const isAvailable = isOptionAvailable(attrName, colorValue);
-                
                 return (
                   <div
                     key={`${attrName}-${colorValue}`}
                     className={`color-option ${isSelected ? 'active' : ''} ${!isAvailable ? 'unavailable' : ''}`}
-                    style={{
-                      backgroundColor: getColorCode(colorValue),
-                      border: `2px solid ${isSelected ? '#3498db' : '#ddd'}`
-                    }}
+                    style={{ backgroundColor: getColorCode(colorValue) }}
                     onClick={() => isAvailable && handleColorSelect(attrName, colorValue)}
-                    title={`${formatDisplayText(colorValue)}${!isAvailable ? ' (Indisponível)' : ''}`}
+                    title={formatDisplayText(colorValue)}
                   />
                 );
               })}
@@ -426,19 +382,16 @@ function BottleCustomizer({ onComplete }) {
             <h4 className="option-title">{displayName}</h4>
             <div className="toggle-options-container">
               {allValues.map(value => {
-                const isSelected = selectedVariation.attributes && selectedVariation.attributes[attrName] === value;
+                const isSelected = selectedVariation.attributes?.[attrName] === value;
                 const isAvailable = isOptionAvailable(attrName, value);
-                
                 return (
                   <button
                     key={`${attrName}-${value}`}
-                    type="button"
                     className={`toggle-option ${isSelected ? 'active' : ''} ${!isAvailable ? 'unavailable' : ''}`}
                     onClick={() => isAvailable && handleToggleSelect(attrName, value)}
-                    title={`${formatToggleText(value)}${!isAvailable ? ' (Indisponível)' : ''}`}
                     disabled={!isAvailable}
                   >
-                    {formatToggleText(value)}
+                    {formatDisplayText(value)}
                   </button>
                 );
               })}
@@ -451,73 +404,55 @@ function BottleCustomizer({ onComplete }) {
         <div className="option-group" key={attrName}>
           <h4 className="option-title">{displayName}</h4>
           <select
-            value={selectedVariation.attributes && selectedVariation.attributes[attrName] || ''}
+            value={selectedVariation.attributes?.[attrName] || ''}
             onChange={(e) => handleAttributeChange(attrName, e.target.value)}
           >
             <option value="">Selecione</option>
             {availableValues.map(val => (
-              <option key={`${attrName}-${val}`} value={val}>
-                {formatDisplayText(val)}
-              </option>
+              <option key={val} value={val}>{formatDisplayText(val)}</option>
             ))}
           </select>
         </div>
       );
     });
-  }, [selectedVariation, variations, getAvailableOptions, getAllOptionsForAttribute, getAllAttributeNames, isOptionAvailable, handleColorSelect, handleToggleSelect, handleAttributeChange]);
+  };
 
   return (
     <div className="bottle-customizer-container">
       <div className="customizer-header">
         <h2>Personalize seu frasco</h2>
         {selectedProduct && (
-          <button
-            className="btn btn-secondary clear-filters-btn"
-            onClick={clearFilters}
-            disabled={!variations.length || variations.length <= 1}
-          >
+          <button className="btn btn-secondary clear-filters-btn" onClick={clearFilters}>
             Limpar Filtros
           </button>
         )}
       </div>
 
-      {/* Seleção da família */}
       <div className="option-group">
         <label>Família</label>
-        <select
-          value={selectedProduct?.id || ''}
-          onChange={(e) => handleFamilyChange(e.target.value)}
-        >
-          {products.map(p => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
+        <select value={selectedProduct?.id || ''} onChange={(e) => handleFamilyChange(e.target.value)}>
+          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </div>
 
       {selectedProduct && selectedVariation && (
         <div className="customizer-wrapper">
-          {/* Coluna esquerda → imagem e info */}
           <div className="left-column">
             <img
               className="bottle-image"
-              src={customizedImage || selectedVariation.image?.src || selectedProduct.images?.[0]?.src || selectedProduct.image}
+              src={generatedImage || selectedVariation.image?.src || selectedProduct.images?.[0]?.src || selectedProduct.image}
               alt={selectedProduct.name}
+              loading="lazy"
             />
-            
-            {/* Outputs de texto abaixo da imagem */}
+
             <div className="concepts-output">
               <div className="output-section">
                 <h4>Conceito da Marca</h4>
-                <div className="output-text">
-                  {brandConcept || 'Descreva sua marca e gere os conceitos...'}
-                </div>
+                <div className="output-text">{brandConcept || 'Descreva sua marca...'}</div>
               </div>
-              
               <div className="output-section">
                 <h4>Conceito da Embalagem</h4>
-                <div className="output-text">
-                  {packagingConcept || 'Descreva sua marca e gere os conceitos...'}
-                </div>
+                <div className="output-text">{packagingConcept || 'Descreva sua marca...'}</div>
               </div>
             </div>
 
@@ -525,7 +460,7 @@ function BottleCustomizer({ onComplete }) {
               <div className="variation-info">
                 <p><strong>SKU:</strong> {selectedVariation.sku || 'N/A'}</p>
                 <p><strong>Estoque:</strong> {selectedVariation.stock_status || 'N/A'}</p>
-                <p className="price">R$ {selectedVariation.price || selectedVariation.display_price || 'N/A'}</p>
+                <p className="price">R$ {selectedVariation.price || 'N/A'}</p>
               </div>
             ) : (
               <div className="variation-info">
@@ -534,43 +469,45 @@ function BottleCustomizer({ onComplete }) {
             )}
           </div>
 
-          {/* Coluna direita → atributos */}
           <div className="right-column">
             <h3>Configurações</h3>
+
             {renderOptionGroups()}
 
-            {/* Textarea para prompt */}
             <div className="prompt-input-group">
               <h4 className="option-title">Descreva sua marca</h4>
               <textarea
                 className="prompt-textarea"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Descreva com palavras-chave ou detalhes como quer sua marca (ex: natural, premium, vibrante, para pele sensível...)"
+                placeholder="Ex: marca natural e premium para cabelos, com embalagens sustentáveis, cores terrosas e design elegante..."
                 rows={4}
               />
-              
+
               {error && <div className="error-message">{error}</div>}
+
+              <button 
+                className="btn btn-primary" 
+                onClick={generateConceptsHandler}
+                disabled={!prompt.trim() || isGenerating}
+              >
+                {isGenerating ? 'Gerando...' : 'Gerar Conceitos'}
+              </button>
+
+              <button 
+                className="btn btn-success"
+                onClick={applyConceptToBottle}
+                disabled={isGenerating || !brandConcept || !packagingConcept}
+              >
+                {isGenerating ? "Gerando imagem..." : "Aplicar Conceito no Frasco"}
+              </button>
               
-              <div className="action-buttons">
-                <button 
-                  className="btn btn-primary" 
-                  onClick={generateConcepts}
-                  disabled={!prompt.trim() || isGenerating}
-                >
-                  {isGenerating ? 'Gerando...' : 'Gerar Conceitos'}
-                </button>
-                
-                {(brandConcept && packagingConcept) && (
-                  <button 
-                    className="btn btn-accent" 
-                    onClick={generateCustomImage}
-                    disabled={isGeneratingImage}
-                  >
-                    {isGeneratingImage ? 'Criando Frasco...' : 'Criar Frasco Personalizado'}
-                  </button>
-                )}
-              </div>
+              {isGenerating && (
+                <div className="generating-overlay">
+                  <div className="spinner"></div>
+                  <p>Gerando... Isso pode levar alguns segundos</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
